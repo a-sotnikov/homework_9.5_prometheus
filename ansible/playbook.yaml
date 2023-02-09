@@ -1,0 +1,210 @@
+---
+- name: Pre-install
+  hosts: all
+  become: true
+  remote_user: admin
+  gather_facts: false
+  tags: 'Done'
+
+  tasks:
+    - name: Add group
+      ansible.builtin.group:
+        name: "prometheus"
+        state: present
+        system: true
+
+    - name: Add user
+      ansible.builtin.user:
+        name: "prometheus"
+        group: "prometheus"
+        create_home: false
+        system: true
+        state: present
+    
+    - name: Copy services
+      ansible.builtin.copy:
+        src: './services/'
+        dest: '/etc/systemd/system/'
+        mode: '744'
+
+    - name: Check dirs
+      ansible.builtin.file:
+        path: '{{ item }}'
+        state: directory
+        owner: "prometheus"
+        group: 'prometheus'
+        mode: '755'
+        recurse: true
+      loop:
+        - "/etc/prometheus"
+        - '/etc/prometheus/node_exporter'
+        - "/var/lib/prometheus"
+
+- name: Download and copy files
+  hosts: prometheus_server
+  become: true
+  remote_user: admin
+  gather_facts: false
+  tags: 'Done'
+
+  tasks:
+
+    - name: Download and unpack apps
+      ansible.builtin.unarchive:
+        remote_src: true
+        src: '{{ item }}'
+        dest: "/home/admin/"
+      loop:
+        - 'https://github.com/prometheus/node_exporter/releases/download/v1.4.0/node_exporter-1.4.0.linux-amd64.tar.gz'
+        - 'https://github.com/prometheus/prometheus/releases/download/v2.42.0/prometheus-2.42.0.linux-386.tar.gz'
+        - 'https://github.com/prometheus/alertmanager/releases/download/v0.25.0/alertmanager-0.25.0.linux-386.tar.gz'
+
+    - name: Copy files to bin
+      ansible.builtin.copy:
+        remote_src: true
+        src: '{{ item }}'
+        dest: "/usr/local/bin/"
+        owner: 'prometheus'
+        group: 'prometheus'
+        mode: '744'
+      loop:
+        - "/home/admin/prometheus-2.42.0.linux-386/prometheus"
+        - "/home/admin/prometheus-2.42.0.linux-386/promtool"
+        - '/home/admin/alertmanager-0.25.0.linux-386/amtool'
+        - '/home/admin/alertmanager-0.25.0.linux-386/alertmanager'
+
+    - name: Copy config files
+      ansible.builtin.copy:
+        src: '{{ item }}'
+        dest: "/etc/prometheus/"
+        owner: 'prometheus'
+        group: 'prometheus'
+        mode: '755'
+      loop:
+        - './prometheus.yml'
+        - './alertmanager.yml'
+
+    - name: Copy dirs
+      ansible.builtin.copy:
+        remote_src: true
+        src: '{{ item }}'
+        dest: "/etc/prometheus/"
+        owner: 'prometheus'
+        group: 'prometheus'
+        mode: '755'
+      loop:
+        - "/home/admin/prometheus-2.42.0.linux-386/console_libraries"
+        - "/home/admin/prometheus-2.42.0.linux-386/consoles"
+
+    - name: 'Copy bin'
+      ansible.builtin.copy:
+        remote_src: true
+        src: '/home/admin/node_exporter-1.4.0.linux-amd64/'
+        dest: '/etc/prometheus/node_exporter/'
+        owner: prometheus
+        group: prometheus
+        mode: '755'
+
+- name: Setup prometheus
+  hosts: prometheus_server
+  become: true
+  remote_user: admin
+  gather_facts: false
+  tags: 'Done'
+
+  tasks:
+
+    - name: Enable and restart
+      ansible.builtin.systemd:
+        name: 'prometheus'
+        state: restarted
+        enabled: true
+
+    - name: Check Prometheus
+      ansible.builtin.uri:
+        url: 'http://localhost:9090'
+        status_code:
+          - '200'
+
+- name: Install NodeExplorer
+  hosts: all
+  become: true
+  remote_user: admin
+  gather_facts: false
+  tags: 'Done'
+
+  tasks:
+
+
+
+- name: Setup node_exporter
+  hosts: all
+  become: true
+  remote_user: admin
+  gather_facts: false
+  tags: 'Done'
+
+  tasks:
+
+    - name: Enable and restart
+      ansible.builtin.systemd:
+        name: 'node_exporter'
+        state: restarted
+        enabled: true
+
+    - name: Check NodeExplorer
+      ansible.builtin.uri:
+        url: 'http://localhost:9100'
+        status_code:
+          - '200'
+
+- name: Install and setup Grafana
+  hosts: prometheus_server
+  become: true
+  remote_user: admin
+  gather_facts: false
+  tags: 'Done'
+
+  tasks:
+
+    - name: Get packages
+      ansible.builtin.apt:
+        package:
+          - adduser
+          - libfontconfig1
+        update_cache: true
+
+    - name: Get package
+      ansible.builtin.get_url:
+        url: 'https://dl.grafana.com/oss/release/grafana_9.3.6_amd64.deb'
+        dest: '/home/admin'
+
+    - name: Install package
+      ansible.builtin.apt:
+        deb: '/home/admin/grafana_9.3.6_amd64.deb'
+
+- name: Run and enable Grafana
+  hosts: prometheus_server
+  become: true
+  remote_user: admin
+  gather_facts: false
+
+  tasks:
+    - name: Enable and restart
+      ansible.builtin.systemd:
+        service: grafana-server
+        state: restarted
+        enabled: true
+
+    - name: Check Grafana
+      ansible.builtin.uri:
+        url: 'http://localhost:3000'
+        status_code:
+          - '200'
+
+- name: Install alert-manager
+  hosts: prometheus_server
+  become: true
+  remote_user: admin
+  gather_facts: false
+

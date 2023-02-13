@@ -20,12 +20,6 @@
         create_home: false
         system: true
         state: present
-    
-    - name: Copy services
-      ansible.builtin.copy:
-        src: './services/'
-        dest: '/etc/systemd/system/'
-        mode: '744'
 
     - name: Check dirs
       ansible.builtin.file:
@@ -73,18 +67,7 @@
         - '/home/admin/alertmanager-0.25.0.linux-386/amtool'
         - '/home/admin/alertmanager-0.25.0.linux-386/alertmanager'
 
-    - name: Copy config files
-      ansible.builtin.copy:
-        src: '{{ item }}'
-        dest: "/etc/prometheus/"
-        owner: 'prometheus'
-        group: 'prometheus'
-        mode: '755'
-      loop:
-        - './prometheus.yml'
-        - './alertmanager.yml'
-
-    - name: Copy dirs
+    - name: Copy console dirs
       ansible.builtin.copy:
         remote_src: true
         src: '{{ item }}'
@@ -96,7 +79,7 @@
         - "/home/admin/prometheus-2.42.0.linux-386/console_libraries"
         - "/home/admin/prometheus-2.42.0.linux-386/consoles"
 
-    - name: 'Copy bin'
+    - name: Copy node_exporter binary
       ansible.builtin.copy:
         remote_src: true
         src: '/home/admin/node_exporter-1.4.0.linux-amd64/'
@@ -105,60 +88,7 @@
         group: prometheus
         mode: '755'
 
-- name: Setup prometheus
-  hosts: prometheus_server
-  become: true
-  remote_user: admin
-  gather_facts: false
-  tags: 'Done'
-
-  tasks:
-
-    - name: Enable and restart
-      ansible.builtin.systemd:
-        name: 'prometheus'
-        state: restarted
-        enabled: true
-
-    - name: Check Prometheus
-      ansible.builtin.uri:
-        url: 'http://localhost:9090'
-        status_code:
-          - '200'
-
-- name: Install NodeExplorer
-  hosts: all
-  become: true
-  remote_user: admin
-  gather_facts: false
-  tags: 'Done'
-
-  tasks:
-
-
-
-- name: Setup node_exporter
-  hosts: all
-  become: true
-  remote_user: admin
-  gather_facts: false
-  tags: 'Done'
-
-  tasks:
-
-    - name: Enable and restart
-      ansible.builtin.systemd:
-        name: 'node_exporter'
-        state: restarted
-        enabled: true
-
-    - name: Check NodeExplorer
-      ansible.builtin.uri:
-        url: 'http://localhost:9100'
-        status_code:
-          - '200'
-
-- name: Install and setup Grafana
+- name: Install Grafana
   hosts: prometheus_server
   become: true
   remote_user: admin
@@ -183,28 +113,122 @@
       ansible.builtin.apt:
         deb: '/home/admin/grafana_9.3.6_amd64.deb'
 
-- name: Run and enable Grafana
+- name: Setup everything
   hosts: prometheus_server
   become: true
   remote_user: admin
   gather_facts: false
+  tags: 'Done'
 
   tasks:
-    - name: Enable and restart
-      ansible.builtin.systemd:
-        service: grafana-server
-        state: restarted
-        enabled: true
 
-    - name: Check Grafana
+    - name: Copy services
+      ansible.builtin.copy:
+        src: './services/'
+        dest: '/etc/systemd/system/'
+        mode: '744'
+      notify: Deamon reload
+
+    - name: Copy config files
+      ansible.builtin.copy:
+        src: './configs/'
+        dest: "/etc/prometheus/"
+        owner: 'prometheus'
+        group: 'prometheus'
+        mode: '755'
+      notify: Services restart
+      tags: 'Update_conf'
+
+    - name: Start and enable
+      ansible.builtin.systemd:
+        name: '{{ item }}'
+        state: started
+        enabled: true
+      loop:
+        - 'prometheus'
+        - 'node_exporter'
+        - 'prometheus_alertmanager'
+        - 'grafana-server'
+
+  handlers:
+
+    - name: Deamon reload
+      ansible.builtin.systemd:
+        daemon_reload: true
+        name: '{{ item }}'
+        state: started
+      loop:
+        - 'prometheus'
+        - 'node_exporter'
+        - 'prometheus_alertmanager'
+
+    - name: Services restart
+      ansible.builtin.systemd:
+        name: '{{ item }}'
+        state: restarted
+      loop:
+        - 'prometheus'
+        - 'prometheus_alertmanager'
+
+  post_tasks:
+
+    - name: Check avaliablity
       ansible.builtin.uri:
-        url: 'http://localhost:3000'
+        url: '{{ item }}'
         status_code:
           - '200'
+      loop:
+        - 'http://localhost:9100'
+        - 'http://localhost:9090'
+        - 'http://localhost:3000'
 
-- name: Install alert-manager
+- name: Setup Docker
   hosts: prometheus_server
   become: true
   remote_user: admin
   gather_facts: false
+  tags: 'Undone'
 
+  pre_tasks:
+    - name: Install gpg-key
+      ansible.builtin.apt_key:
+        url: https://download.docker.com/linux/ubuntu/gpg
+        state: present
+
+    - name: Install repo
+      ansible.builtin.apt_repository:
+        repo: 'deb https://download.docker.com/linux/ubuntu jammy stable'
+        state: present
+
+  tasks:
+    - name: Install Docker
+      ansible.builtin.apt:
+        package:
+          - docker-ce
+          - docker-ce-cli
+          - containerd.io
+          - docker-buildx-plugin
+          - docker-compose-plugin
+        update_cache: true
+        state: present
+
+    - name: Add admin to docker grp
+      ansible.builtin.user:
+        name: 'admin'
+        group: 'docker'
+        state: present
+
+  post_tasks:
+    - name: Copy daemon.json
+      ansible.builtin.copy:
+        src: './daemon.json'
+        dest: '/etc/docker/'
+        mode: '744'
+      notify: Restart docker
+      tags: add_daemon
+
+  handlers:
+    - name: Restart docker
+      ansible.builtin.systemd:
+        service: 'docker'
+        state: restarted

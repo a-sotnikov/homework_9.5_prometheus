@@ -2,4 +2,4 @@ all:
   children:
     prometheus_server:
       hosts:
-        158.160.9.122:
+        84.201.139.249:
